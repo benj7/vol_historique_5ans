@@ -1,0 +1,822 @@
+---
+title: "Volatilité historique 5 ans"
+author:
+- name: Benjamin DAVID
+  affiliation: Maîtrise des Risques
+date: "`r Sys.Date()`"
+output: pdf_document
+description: '<br>Cette note présente l’évolution de la volatilité historique d’un
+  portefeuille théorique sur des périodes glissantes de 5 ans et donc l’impact sur
+  et 35% Obligations**.'
+  l’indicateur SSRI. Le portefeuille théorique se décompose comme suit : **65% Actions
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+options(scipen = 999)
+```
+
+## Méthodologie
+
+1. **Extraction des données Bloomberg** : Les prix historiques (prix de clôture) de l'index STOXX Europe 600 sont récupérés à un pas hebdomadaire sur la période 2014-2020. Pour les obligations, nous avons considéré des prix constants pour chaque période glissante (hypothèse de volatilité nulle). 
+<br><br>
+2. **Calcul de la volatilité historique 5 ans** : Il s'agit de déterminer, pour chaque période glissante, une volatilité historique annualisée (104 volatilités au total) à partir des rendements hebdomadaires du portefeuille sur une période de 5 ans. 
+<br><br>
+3. **Equivalence SSRI** : Selon la valeur de la volatilité annualisée obtenue, le portefeuille peut être classé dans l’échelle suivante, structurée en classes de risque. 
+
+
+\
+```{r, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE}
+# Load useful packages 
+
+library(Rblpapi)
+library(lubridate)
+library(data.table)
+library(lobstr)
+library(dplyr)
+library(stringr)
+library(purrr)
+library(tictoc)
+library(devtools)
+library(plotly)
+library(furrr)
+
+# Rmarkdown 
+library(rmarkdown)
+library(knitr)
+library(formattable)
+library(kableExtra)
+
+# Get data 
+stoxx600_prices_backup <- readRDS("data/stoxx600_prices_backup.rds")
+corporate3_5y_prices_backup <- readRDS("data/corporate3_5y_prices_backup.rds")
+
+```
+
+
+```{r global, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE}
+srri <- data.table("Classes de risque " = 1:7,
+           "vol >=" = c("0%", "0.5%", "2%",  "5%", "10%", "15%", "25%"),
+           "vol <" = c("0.5%", "2%", "5%",  "10%", "15%", "25%", ""))
+
+srri %>%
+  kable("html", escape = F, align = "c") %>%
+  kable_styling("hover") %>% 
+  column_spec(3, width = "3cm")
+```
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE}
+
+# oldw <- getOption("warn")
+# 
+# 
+# portfolio_indicators_function <- function(stoxx600_prices ,
+#                                           corporate3_5y_prices,
+#                                           part_stocks,
+#                                           index){
+#   
+#   # Suppress warnings in the function only 
+#   options(warn = -1)
+#   
+#   stoxx600_prices <- copy(stoxx600_prices)
+#   
+#   corporate3_5y_prices <- copy(corporate3_5y_prices)
+#   
+#   PX_LAST <- substitute(stoxx600_prices$PX_LAST)
+#   
+#   # Filter to get exactly 5Y historical data 
+#   stoxx600_prices <- stoxx600_prices[index, ]
+#   
+#   # Compute returns 
+#   stoxx600_prices <- stoxx600_prices[, return := eval(PX_LAST)/shift(eval(PX_LAST))-1]
+#   
+#   # Base 100 au début 
+#   stoxx600_prices <- stoxx600_prices[, value := 100]
+#   
+#   # Valeur du portefeuille dans le temps 
+#   for (i in 1:(nrow(stoxx600_prices)-1)){
+#     stoxx600_prices[i+1, 4] <-  stoxx600_prices[i, 4] * (1 + stoxx600_prices[i+1, 3])
+#   }
+#   
+#   # Volatilité annualisée - Ecart type des rendements 
+#   sd(stoxx600_prices$return, na.rm = TRUE) * sqrt(52)
+#   
+#   # BLOOMBERG BARCLAYS EURO AGGREGATE CORPORATE 3-5Y ----
+#   
+#   corporate3_5y_prices <- corporate3_5y_prices[index, ]
+#   
+#   corporate3_5y_prices <- corporate3_5y_prices[, return := PX_LAST/shift(PX_LAST)-1]
+#   
+#   # Base 100 au début 
+#   corporate3_5y_prices <- corporate3_5y_prices[, value := 100]
+#   
+#   # Valeur du portefeuille dans le temps 
+#   for (i in 1:(nrow(corporate3_5y_prices)-1)){
+#     corporate3_5y_prices[i+1, 4] <-  corporate3_5y_prices[i, 4] * (1 + corporate3_5y_prices[i+1, 3])
+#   }
+#   
+#   # Volatilité annualisée - Ecart type des rendements 
+#   sd(corporate3_5y_prices$return, na.rm = TRUE) * sqrt(52)
+#   
+#   # Portfolio Split
+#   
+#   part_stocks <- part_stocks
+#   part_corporate <- 1 - part_stocks
+#   
+#   # Hide code ----
+#   portfolio <- left_join(stoxx600_prices, 
+#                          corporate3_5y_prices,
+#                          by = "date")
+#   
+#   
+#   portfolio <- portfolio[, c("value.x_stocks", "value.y_corporate") := list(value.x * part_stocks,
+#                                                                             value.y * part_corporate)]
+#   
+#   portfolio <- portfolio[, value_portfolio := value.x_stocks + value.y_corporate]
+#   
+#   portfolio <- portfolio[, return_portfolio := value_portfolio/shift(value_portfolio)-1]
+#   
+#   start_date  <- min(portfolio$date)
+#   
+#   end_date <- max(portfolio$date)
+#   
+#   portfolio_vol <- sd(portfolio$return_portfolio, na.rm = TRUE) * sqrt(52)
+#   
+#   # Performance sur 5 ans  
+#   
+#   portfolio_perf5Y <- portfolio[, last(value_portfolio)/first(value_portfolio)-1]
+#   
+#   # Performance annualisée 
+#   
+#   portfolio_perf1Y <- (1 + portfolio[, last(value_portfolio)/first(value_portfolio)-1])^(1/(length(index)/52)) - 1
+#   
+#   
+#   portfolio_indicators <- data.table(start_date, 
+#                                      end_date,
+#                                      portfolio_vol, 
+#                                      portfolio_perf5Y,
+#                                      portfolio_perf1Y)
+#   
+#   return(portfolio_indicators)
+#   
+#   # Reset old warn value 
+#   on.exit(options(warn = oldw))
+#   
+# }
+# 
+# 
+# nb_rows <- nrow(stoxx600_prices_backup)
+# 
+# histo_5Y <- nb_rows - 260 + 1
+# 
+# index <- histo_5Y:nb_rows
+# 
+# # params$ to access values defined above 
+# nbval <- 104
+# 
+# list_index <- list()
+# 
+# for (i in 0:(nbval-1)){
+#   listi <- list(index-i) 
+#   list_index <- append(list_index, listi)
+# }
+# 
+# #  Future_map (multisession mode i.e parallel calls)
+# options(future.supportsMulticore.unstable = "quiet")
+# future::plan(strategy = multisession)
+# 
+# # tic()
+# part_stocks <- 0.65
+# portfolio_indicators_results <- future_pmap_dfr(list(replicate(n = nbval,
+#                                                                expr = {stoxx600_prices_backup},
+#                                                                simplify = F),
+#                                                      replicate(n = nbval,
+#                                                                expr = {corporate3_5y_prices_backup},
+#                                                                simplify = F),
+#                                                      list(rep(part_stocks, nbval)),
+#                                                      list_index), 
+#                                                 portfolio_indicators_function)
+# # toc()
+# # 20.86 sec elapsed
+# 
+# portfolio_indicators_results <- portfolio_indicators_results[, vol_avg := mean(portfolio_vol)]
+
+
+```
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE}
+
+oldw <- getOption("warn")
+
+# ATTENTION on force les valeurs des oblig à 100 tout le temps dans le corps de cette fonction => pas de volatilité sur l'actif obligataire 
+
+portfolio_indicators_function2 <- function(stoxx600_prices ,
+                                          corporate3_5y_prices,
+                                          part_stocks,
+                                          index){
+  
+  # Suppress warnings in the function only 
+  options(warn = -1)
+  
+  stoxx600_prices <- copy(stoxx600_prices)
+  
+  corporate3_5y_prices <- copy(corporate3_5y_prices)
+  
+  PX_LAST <- substitute(stoxx600_prices$PX_LAST)
+  
+  # Filter to get exactly 5Y historical data 
+  stoxx600_prices <- stoxx600_prices[index, ]
+  
+  # Compute returns 
+  stoxx600_prices <- stoxx600_prices[, return := eval(PX_LAST)/shift(eval(PX_LAST))-1]
+  
+  # Base 100 au début 
+  stoxx600_prices <- stoxx600_prices[, value := 100]
+  
+  # Valeur du portefeuille dans le temps 
+  for (i in 1:(nrow(stoxx600_prices)-1)){
+    stoxx600_prices[i+1, 4] <-  stoxx600_prices[i, 4] * (1 + stoxx600_prices[i+1, 3])
+  }
+  
+  # Volatilité annualisée - Ecart type des rendements 
+  sd(stoxx600_prices$return, na.rm = TRUE) * sqrt(52)
+  
+  # BLOOMBERG BARCLAYS EURO AGGREGATE CORPORATE 3-5Y ----
+  
+  corporate3_5y_prices <- corporate3_5y_prices[index, ]
+  
+  # On force à 100 pour qu'il n'y ait pas de volatilité pour l'actif obligataire 
+  
+  corporate3_5y_prices <- corporate3_5y_prices[, PX_LAST := 100]
+  
+  corporate3_5y_prices <- corporate3_5y_prices[, return := PX_LAST/shift(PX_LAST)-1]
+  
+  # Base 100 au début 
+  corporate3_5y_prices <- corporate3_5y_prices[, value := 100]
+  
+  # Valeur du portefeuille dans le temps 
+  for (i in 1:(nrow(corporate3_5y_prices)-1)){
+    corporate3_5y_prices[i+1, 4] <-  corporate3_5y_prices[i, 4] * (1 + corporate3_5y_prices[i+1, 3])
+  }
+  
+  # Volatilité annualisée - Ecart type des rendements 
+  sd(corporate3_5y_prices$return, na.rm = TRUE) * sqrt(52)
+  
+  # Portfolio Split
+  
+  part_stocks <- part_stocks
+  part_corporate <- 1 - part_stocks
+  
+  # Hide code ----
+  portfolio <- left_join(stoxx600_prices, 
+                         corporate3_5y_prices,
+                         by = "date")
+  
+  
+  portfolio <- portfolio[, c("value.x_stocks", "value.y_corporate") := list(value.x * part_stocks,
+                                                                            value.y * part_corporate)]
+  
+  portfolio <- portfolio[, value_portfolio := value.x_stocks + value.y_corporate]
+  
+  portfolio <- portfolio[, return_portfolio := value_portfolio/shift(value_portfolio)-1]
+  
+  start_date  <- min(portfolio$date)
+  
+  end_date <- max(portfolio$date)
+  
+  portfolio_vol <- sd(portfolio$return_portfolio, na.rm = TRUE) * sqrt(52)
+  
+  # Performance sur 5 ans  
+  
+  portfolio_perf5Y <- portfolio[, last(value_portfolio)/first(value_portfolio)-1]
+  
+  # Performance annualisée 
+  
+  portfolio_perf1Y <- (1 + portfolio[, last(value_portfolio)/first(value_portfolio)-1])^(1/(length(index)/52)) - 1
+  
+  
+  portfolio_indicators <- data.table(start_date, 
+                                     end_date,
+                                     portfolio_vol, 
+                                     portfolio_perf5Y,
+                                     portfolio_perf1Y)
+  
+  return(portfolio_indicators)
+  
+  # Reset old warn value 
+  on.exit(options(warn = oldw))
+  
+}
+
+
+nb_rows <- nrow(stoxx600_prices_backup)
+
+histo_5Y <- nb_rows - 260 + 1
+
+index <- histo_5Y:nb_rows
+
+# params$ to access values defined above 
+nbval <- 104
+
+list_index <- list()
+
+for (i in 0:(nbval-1)){
+  listi <- list(index-i) 
+  list_index <- append(list_index, listi)
+}
+
+#  Future_map (multisession mode i.e parallel calls)
+options(future.supportsMulticore.unstable = "quiet")
+future::plan(strategy = multisession)
+
+# tic()
+part_stocks <- 0.65
+portfolio_indicators_results <- future_pmap_dfr(list(replicate(n = nbval,
+                                                               expr = {stoxx600_prices_backup},
+                                                               simplify = F),
+                                                     replicate(n = nbval,
+                                                               expr = {corporate3_5y_prices_backup},
+                                                               simplify = F),
+                                                     list(rep(part_stocks, nbval)),
+                                                     list_index), 
+                                                portfolio_indicators_function2)
+# toc()
+# 20.86 sec elapsed
+
+portfolio_indicators_results <- portfolio_indicators_results[order(start_date, end_date)]
+
+portfolio_indicators_results <- portfolio_indicators_results[, c("vol_avg", "perf5Y_avg") :=
+                                                               list(mean(portfolio_vol), mean(portfolio_perf5Y))]
+
+
+```
+
+## Résultats
+
+### Volatilité historique 
+
+#### Portefeuille initial 
+
+
++ La volatilité historique sur une période de 5 ans de notre portefeuille théorique était toujours inférieure à 10% jusqu'à mars 2020 lorsque les marchés ont dévissé en raison du COVID-19. 
+
++ Entre le 6 et le 13 mars 2020, la volatité historique 5 ans passe de 9.38% à 10.79%. Le SRRI de notre portefeuille passe donc de 4 à 5 en l'espace d'une semaine.  
+
++ La moyenne des volatilités historiques 5 ans (toutes périodes glissantes confondues) est égale à `r unique(percent(portfolio_indicators_results$vol_avg))` (trait plein sur le graphique ci-dessous).
+
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE, fig.width = 10, fig.height = 6, fig.align='center'}
+
+
+percent <- function(x, digits = 2, format = "f", ...) {
+  paste0(formatC(100 * x, format = format, digits = digits, ...), "%")
+}
+
+col <- "#008BBC"
+
+p <- ggplot(data = portfolio_indicators_results) +
+  geom_line(aes(x = start_date, 
+                 y = portfolio_vol),
+                 color = col) +
+  geom_point(aes(x = start_date, 
+                 y = portfolio_vol,
+                 text = str_c("\n start_date: ", start_date,
+                              "\n end_date: ", end_date,
+                              "\n vol_5Y: ", percent(portfolio_vol),
+                              "\n perf_5Y: ", percent(portfolio_perf5Y),
+                              "\n perf_1Y: ", percent(portfolio_perf1Y))
+                 ), 
+  shape=21, color="white", fill = col, size=3) +
+  geom_line(aes(x = start_date,
+                y = vol_avg),
+            color = col
+  ) +
+  xlab("") +
+  ylab("") +
+  theme_classic() +
+  theme(
+    legend.position="none",
+    axis.line.y = element_blank()
+  )
+
+
+ggplotly(p, tooltip = "text") %>%
+  config(displayModeBar = F)
+                   
+```
+
+<aside> **Grille de lecture** <br><br> Pour la période comprise entre le 25/12/2015 et le 11/12/2020, la volatilité historique annualisée est égale à `r percent(portfolio_indicators_results[start_date == "2015-12-25", portfolio_vol])`. 
+<br><br>
+La performance cumulée sur cette même période est de `r percent(portfolio_indicators_results[start_date == "2015-12-25", portfolio_perf5Y])`, ce qui représente une performance annualisée de `r percent(portfolio_indicators_results[start_date == "2015-12-25", portfolio_perf1Y])`.  </aside>
+
+#### Portefeuille réalloué
+
++ On simule une réallocation du portefeuille au 16 mars 2020, après que la volatilité ait dépassé 10% pour la première fois. Notre nouveau portefeuille est ainsi constitué de **55% d'actions et 45% d'obligations**.  
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE}
+
+# Function 
+# limit_vol <- function(portfolio, 
+#                       part_stocks){
+#   
+#   portfolio <- copy(portfolio)
+#   
+#   value.x <- substitute(portfolio$value.x)
+#   
+#   value.y <- substitute(portfolio$value.y)
+#   
+#   part_corporate <- 1 - part_stocks
+#   
+#   portfolio <- portfolio[, c("value.x_stocks", "value.y_corporate") := list(value.x * part_stocks,
+#                                                                             value.y * part_corporate)]
+#   
+#   portfolio <- portfolio[, value_portfolio := value.x_stocks + value.y_corporate]
+#   
+#   portfolio <- portfolio[, return_portfolio := value_portfolio/shift(value_portfolio)-1]
+#   
+#   start_date  <- min(portfolio$date)
+#   
+#   end_date <- max(portfolio$date)
+#   
+#   portfolio_vol <- sd(portfolio$return_portfolio, na.rm = TRUE) * sqrt(52)
+#   
+#   distance_vol10 <- abs(portfolio_vol - 0.1)
+#   
+#   # Performance sur 5 ans  
+#   
+#   portfolio_perf5Y <- portfolio[, last(value_portfolio)/first(value_portfolio)-1]
+#   
+#   # Performance annualisée 
+#   
+#   portfolio_perf1Y <- (1 + portfolio[, last(value_portfolio)/first(value_portfolio)-1])^(1/(length(index)/52)) - 1
+#   
+#   
+#   results <- data.table(start_date, 
+#                         end_date,
+#                         part_stocks,
+#                         part_corporate,
+#                         portfolio_vol, 
+#                         distance_vol10,
+#                         portfolio_perf5Y,
+#                         portfolio_perf1Y)
+#   
+#   return(results)
+#   
+# }
+
+# On repère les périodes glissantes pour lesquelles la vol est supérieure à 10%
+
+# index2 <- portfolio_indicators_results[portfolio_vol > 0.1, which = TRUE]
+# 
+# res <- c()
+# 
+# for (i in 1:length(index2)){
+#   
+#   index3 <- list_index[[index2[i]]]
+#   
+#   # Filter to get exactly 5Y historical data 
+#   
+#   stoxx600_prices <- stoxx600_prices_backup
+#   
+#   stoxx600_prices <- stoxx600_prices[index3, ]
+#   
+#   # Compute returns 
+#   stoxx600_prices <- stoxx600_prices[, return := eval(PX_LAST)/shift(eval(PX_LAST))-1]
+#   
+#   # Base 100 au début 
+#   stoxx600_prices <- stoxx600_prices[, value := 100]
+#   
+#   # Valeur du portefeuille dans le temps 
+#   for (i in 1:(nrow(stoxx600_prices)-1)){
+#     stoxx600_prices[i+1, 4] <-  stoxx600_prices[i, 4] * (1 + stoxx600_prices[i+1, 3])
+#   }
+#   
+#   # Volatilité annualisée - Ecart type des rendements 
+#   sd(stoxx600_prices$return, na.rm = TRUE) * sqrt(52)
+#   
+#   # BLOOMBERG BARCLAYS EURO AGGREGATE CORPORATE 3-5Y ----
+#   corporate3_5y_prices <- corporate3_5y_prices_backup
+#   
+#   corporate3_5y_prices <- corporate3_5y_prices[index3, ]
+#   
+#   corporate3_5y_prices <- corporate3_5y_prices[, return := PX_LAST/shift(PX_LAST)-1]
+#   
+#   # Base 100 au début 
+#   corporate3_5y_prices <- corporate3_5y_prices[, value := 100]
+#   
+#   # Valeur du portefeuille dans le temps 
+#   for (i in 1:(nrow(corporate3_5y_prices)-1)){
+#     corporate3_5y_prices[i+1, 4] <-  corporate3_5y_prices[i, 4] * (1 + corporate3_5y_prices[i+1, 3])
+#   }
+#   
+#   # Volatilité annualisée - Ecart type des rendements 
+#   sd(corporate3_5y_prices$return, na.rm = TRUE) * sqrt(52)
+#   
+#   
+#   
+#   # Join stock and bonds in a single dataframe ----
+#   portfolio <- left_join(stoxx600_prices, 
+#                          corporate3_5y_prices,
+#                          by = "date")
+#   
+#   part_stocks <- as.list(seq(0.5, 0.65, 0.01)) 
+#   
+#   nbval <- length(part_stocks)
+#   
+#   tmp <- future_pmap_dfr(list(replicate(n = nbval,
+#                                         expr = {portfolio},
+#                                         simplify = F),
+#                               part_stocks),
+#                          limit_vol)
+#   
+#   tmp <- tmp[portfolio_vol < 0.1]
+#   
+#   tmp <- tmp[order(distance_vol10)]
+#   
+#   tmp <- tmp[, .SD[1]]
+#   
+#   res <- rbind(res, tmp)
+#   
+#   
+# }
+# 
+# 
+# # on garde les colonnes également présentes dans portfolio_indicators_results et on modifie les lignes où la volatilité dépassait 10%
+# 
+# res2 <- res[, .(start_date, end_date, portfolio_vol, portfolio_perf5Y, portfolio_perf1Y)]
+# 
+# portfolio_indicators_results2 <- portfolio_indicators_results[, vol_avg := NULL]
+# 
+# portfolio_indicators_results2 <- portfolio_indicators_results2[-index2]
+# 
+# portfolio_indicators_results2 <- rbind(res2, portfolio_indicators_results2)
+
+
+```
+
+
+
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE}
+
+
+portfolio_indicators_results <- portfolio_indicators_results[order(-start_date)]
+
+# on observe à partir de quelle date la volatilité dépasse 10%
+
+index4 <- portfolio_indicators_results[portfolio_vol > 0.1 , which = TRUE]
+
+# On supprime la dernière valeur, on attend que la volatilité dépasse effectivement 10% avant de réallouer le portefeuille 
+
+index4 <- index4[-last(index4)] 
+
+nb_rows <- nrow(stoxx600_prices_backup)
+
+histo_5Y <- nb_rows - 260 + 1
+
+index <- histo_5Y:nb_rows
+
+# params$ to access values defined above 
+nbval <- length(index4)
+
+list_index2 <- list_index[index4]
+
+#  Future_map (multisession mode i.e parallel calls)
+options(future.supportsMulticore.unstable = "quiet")
+future::plan(strategy = multisession)
+
+# tic()
+part_stocks <- 0.55
+portfolio_indicators_results2 <- future_pmap_dfr(list(replicate(n = nbval,
+                                                                expr = {stoxx600_prices_backup},
+                                                                simplify = F),
+                                                      replicate(n = nbval,
+                                                                expr = {corporate3_5y_prices_backup},
+                                                                simplify = F),
+                                                      list(rep(part_stocks, nbval)),
+                                                      list_index2), 
+                                                 portfolio_indicators_function2)
+# toc()
+
+colnames <- colnames(portfolio_indicators_results)[!str_detect(colnames(portfolio_indicators_results), "avg")]
+
+portfolio_indicators_results3 <- portfolio_indicators_results[-index4]
+
+portfolio_indicators_results3 <- portfolio_indicators_results3[, .SD, .SDcols = colnames]
+
+portfolio_indicators_results_final <- rbind(portfolio_indicators_results2, 
+                                            portfolio_indicators_results3)
+
+portfolio_indicators_results_final <- portfolio_indicators_results_final[order(start_date, end_date)]
+
+portfolio_indicators_results_final <- portfolio_indicators_results_final[, c("vol_avg", "perf5Y_avg") :=
+                                                                           list(mean(portfolio_vol), mean(portfolio_perf5Y))]
+
+
+```
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE, fig.width = 10, fig.height = 6, fig.align='center'}
+col1 <- "#008BBC"
+col2 <- "#C10534"
+
+p <- ggplot() +
+  geom_line(data = portfolio_indicators_results,
+            aes(x = start_date, 
+                y = portfolio_vol),
+            color = col1) +
+  geom_point(data = portfolio_indicators_results,
+             aes(x = start_date, 
+                 y = portfolio_vol,
+                 text = str_c("\n PORTEFEUILLE INITIAL", "",
+                              "\n start_date: ", start_date,
+                              "\n end_date: ", end_date,
+                              "\n vol_5Y: ", percent(portfolio_vol),
+                              "\n perf_5Y: ", percent(portfolio_perf5Y),
+                              "\n perf_1Y: ", percent(portfolio_perf1Y))
+             ), 
+             shape=21, color="white", fill = col1, size=3) +
+  geom_line(data = portfolio_indicators_results,
+            aes(x = start_date,
+                y = vol_avg),
+            color = col1) +
+  geom_line(data = portfolio_indicators_results_final,
+            aes(x = start_date, 
+                y = portfolio_vol),
+            color = col2) +
+  geom_point(data = portfolio_indicators_results_final,
+             aes(x = start_date, 
+                 y = portfolio_vol,
+                 text = str_c("\n PORTEFEUILLE REALLOUÉ", "",
+                              "\n start_date: ", start_date,
+                              "\n end_date: ", end_date,
+                              "\n vol_5Y: ", percent(portfolio_vol),
+                              "\n perf_5Y: ", percent(portfolio_perf5Y),
+                              "\n perf_1Y: ", percent(portfolio_perf1Y))
+             ), 
+             shape=21, color="white", fill = col2, size=3) +
+  geom_line(data = portfolio_indicators_results_final,
+            aes(x = start_date,
+                y = vol_avg),
+            color = col2
+  ) +
+  xlab("") +
+  ylab("") +
+  theme_classic() +
+  theme(
+    legend.position="none",
+    axis.line.y = element_blank()
+  )
+
+p <- p + annotate("text",
+             x = as.Date("2015-08-21"),
+             y = 0.088,
+             label = "Réallocation du portefeuille \n à partir de mi-mars 2020 \n (en rouge)",
+             size = 3)
+
+ggplotly(p, tooltip = "text", ) %>%
+  config(displayModeBar = F)
+```
+
+### Comparaison des performances 
+
++ Le portefeuille initial a, en moyenne (toutes périodes glissantes confondues), une performance cumulée sur 5 ans de `r percent(unique(portfolio_indicators_results[, perf5Y_avg]))` versus `r percent(unique(portfolio_indicators_results_final[, perf5Y_avg]))` pour le portefeuille réalloué. La différence est donc très subtile toutes périodes glissantes confondues. 
+
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE, fig.width = 10, fig.height = 6, fig.align='center'}
+
+#   blue_gray   blue_dark green_light    blue_mid  blue_light  green_dark        gray  blue_light    red_dark   red_light 
+#   "#6794a7"   "#014d64"   "#76c0c1"   "#01a2d9"   "#7ad2f6"   "#00887d"   "#adadad"   "#7bd3f6"   "#7c260b"   "#ee8f71" 
+# green_light       brown 
+#   "#76c0c1"   "#a18376"
+
+# edkblue  emidblue   eltblue   emerald     erose    ebblue  eltgreen     stone      navy    maroon     brown  lavender 
+# "#3E647D" "#7B92A8" "#82C0E9" "#2D6D66" "#BFA19C" "#008BBC" "#97B6B0" "#D7D29E" "#1A476F" "#90353B" "#9C8847" "#938DD2" 
+#      teal cranberry     khaki 
+# "#6E8E84" "#C10534" "#CAC27E"
+  
+
+
+p <- ggplot() +
+  geom_line(data = portfolio_indicators_results,
+            aes(x = start_date, 
+                y = portfolio_perf5Y),
+            color = col1) +
+  geom_point(data = portfolio_indicators_results,
+             aes(x = start_date, 
+                 y = portfolio_perf5Y,
+                 text = str_c("\n PORTEFEUILLE INITIAL", "",
+                              "\n start_date: ", start_date,
+                              "\n end_date: ", end_date,
+                              "\n perf_5Y: ", percent(portfolio_perf5Y),
+                              "\n perf_1Y: ", percent(portfolio_perf1Y))
+             ), 
+             shape=21, color="white", fill = col1, size=3) +
+  geom_line(data = portfolio_indicators_results,
+            aes(x = start_date,
+                y = perf5Y_avg),
+            color = col1
+  ) +
+  geom_line(data = portfolio_indicators_results_final,
+            aes(x = start_date, 
+                y = portfolio_perf5Y),
+            color = col2) +
+  geom_point(data = portfolio_indicators_results_final,
+             aes(x = start_date, 
+                 y = portfolio_perf5Y,
+                 text = str_c("\n PORTEFEUILLE REALLOUÉ", "",
+                              "\n start_date: ", start_date,
+                              "\n end_date: ", end_date,
+                              "\n perf_5Y: ", percent(portfolio_perf5Y),
+                              "\n perf_1Y: ", percent(portfolio_perf1Y))
+             ), 
+             shape=21, color="white", fill = col2, size=3) +
+  geom_line(data = portfolio_indicators_results_final,
+            aes(x = start_date,
+                y = perf5Y_avg),
+            color = col2
+  ) +
+  xlab("") +
+  ylab("") +
+  theme_classic() +
+  theme(
+    legend.position="none",
+    axis.line.y = element_blank()
+  )
+
+p <- p + annotate("text", 
+                  x = as.Date("2015-08-21"), 
+                  y = -0.15, 
+                  label = "Réallocation du portefeuille \n à partir de mi-mars 2020 \n (en rouge)", 
+                  size = 3)
+
+
+ggplotly(p, tooltip = "text") %>%
+  config(displayModeBar = F)
+
+ 
+```
++ On observe que la performance sur 5 ans du portefeuille réalloué (55% actions et 45% Obligations) est légèrement supérieure jusqu'en août 2020. Pour les dernières périodes glissantes, c'est l'inverse! Le portefeuille inital affiche une performance 5 ans supérieure à celle du portefeuille réalloué.
+
++ Le graphique suivant met en exergue la **différence de performance sur 5 ans entre le portefeuille initial et le portefeuille réalloué** pour respecter la contrainte de volatilité à 10%.  
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE, fig.width = 10, fig.height = 6, fig.align='center'}
+# Ajout graph différence de performance sur 5Y 
+
+col3 <- "#00887d"
+col4 <- "#014d64"
+# #3B528BFF" "#21908CFF" "#5DC863FF" "#FDE725FF"
+
+portfolio_indicators_results <- portfolio_indicators_results[order(start_date, end_date)]
+
+diff_perf <- portfolio_indicators_results
+
+diff_perf <-  diff_perf[, diff_perf5Y := portfolio_perf5Y - portfolio_indicators_results_final$portfolio_perf5Y]
+
+diff_perf <-  diff_perf[, diff_perf1Y := portfolio_perf1Y - portfolio_indicators_results_final$portfolio_perf1Y]
+
+diff_perf <- diff_perf[, .(start_date, end_date, diff_perf5Y, diff_perf1Y)]
+
+p2 <-  ggplot(data = diff_perf) +
+  geom_line(aes(x = start_date, 
+                y = diff_perf5Y),
+            color = col3) +
+  geom_point(aes(x = start_date, 
+                 y = diff_perf5Y,
+                 text = str_c("\n start_date: ", start_date,
+                              "\n end_date: ", end_date,
+                              "\n diff_perf5Y: ", str_c(as.character(round(diff_perf5Y * 100, 1)),
+                                                        " bps"))
+                 ),
+             shape=21, color="white", fill = col3, size=3) +
+  geom_line(aes(x = start_date, 
+                y = 0),
+            color = "black") +
+  # geom_line(aes(x = start_date, 
+  #               y = diff_perf1Y),
+  #           color = col4) +
+  # geom_point(aes(x = start_date, 
+  #                y = diff_perf1Y,
+  #                text = str_c("\n start_date: ", start_date,
+  #                             "\n end_date: ", end_date,
+  #                             "\n diff_perf1Y: ", percent(diff_perf1Y))
+  #            ), 
+  #            shape=21, color="white", fill = col4, size=3)  +
+  xlab("") +
+  ylab("") +
+  theme_classic() +
+  theme(
+    legend.position="none",
+    axis.line.y = element_blank()
+  )
+
+
+ggplotly(p2, tooltip = "text") %>%
+  config(displayModeBar = F)
+
+
+```
++ **Le graphique suggère qu'il aurait été préférable de ne pas réallouer le portefeuille en termes de performance.** En effet, le portefeuille initial a une performance 5 ans supérieure au portefeuille réalloué pour les dernières périodes glissantes. Par exemple, il y a `r str_c(as.character(round(diff_perf[,last(diff_perf5Y)] * 100, 1))," bps")` d'écart de performance en faveur du portefeuille initial pour la dernière période glissante étudiée. 
+
+<!-- ## Acknowledgments {.appendix} -->
+
+<!-- This is website made with the [distill package](https://rstudio.github.io/distill/) and a custom theme by Alison Hill & [Desirée De Leon](https://desiree.rbind.io/). -->
